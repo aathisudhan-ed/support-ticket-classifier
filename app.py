@@ -5,7 +5,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 from typing import Literal
 
-# Defined Pydantic Schema
+# Defined Schema
 class TicketClassification(BaseModel):
     category: Literal["Billing", "Technical", "Account Access", "General Inquiry"]
     urgency: Literal["Low", "Medium", "High", "Critical"]
@@ -17,10 +17,8 @@ st.set_page_config(page_title="AI Support Ticket Classifier", page_icon="🤖")
 st.title("🤖 AI Support Ticket Classifier")
 st.write("Enter a customer support request below to automatically classify its department and priority.")
 
-# Input Field
 ticket_input = st.text_area("Customer Request:", placeholder="e.g., I was charged twice for my subscription this month!")
 
-# API Key handling from Render Environment
 api_key = os.environ.get("GEMINI_API_KEY")
 
 if st.button("Classify Ticket", type="primary"):
@@ -33,19 +31,19 @@ if st.button("Classify Ticket", type="primary"):
             client = genai.Client(api_key=api_key)
             with st.spinner("Analyzing ticket with Gemini..."):
                 response = client.models.generate_content(
-                    model="gemini-3.8-flash",
+                    model="gemini-3.8-flash",  # <--- Updated model name
                     contents=f"Classify this support ticket:\n\n{ticket_input}",
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
-                        response_schema=TicketClassification.model_json_schema(),
+                        response_schema=TicketClassification.model_json_schema(), # <--- Fixes ModelMetaclass error
                         temperature=0.1
                     )
                 )
                 
-                # Parse JSON output string back into Pydantic model instance
+                # Parse JSON string back into Pydantic model
                 result = TicketClassification.model_validate_json(response.text)
 
-            # Display Results
+            # Display Output UI
             st.divider()
             col1, col2 = st.columns(2)
             col1.metric("Department", result.category)
