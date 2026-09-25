@@ -33,7 +33,7 @@ if st.button("Classify Ticket", type="primary"):
             client = genai.Client(api_key=api_key)
             with st.spinner("Analyzing with Gemini..."):
                 response = client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-2.0-flash",
                     contents=f"Classify this support ticket:\n\n{ticket_input}",
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
