@@ -39,39 +39,62 @@ gemini_api_key = os.environ.get("GEMINI_API_KEY")
 hf_token = os.environ.get("HF_TOKEN")
 
 
-# --- Fallback Engine: Hugging Face Serverless API ---
+# --- Gemini Engine with Auto-Retry on 503 ---
+def classify_with_gemini(
+    client: genai.Client, text: str, retries: int = 3
+) -> str:
+  for attempt in range(retries):
+    try:
+      response = client.models.generate_content(
+          model="gemini-3.8-flash",
+          contents=f"Classify this support ticket:\n\n{text}",
+          config=types.GenerateContentConfig(
+              response_mime_type="application/json",
+              response_schema=TicketClassification.model_json_schema(),
+              temperature=0.1,
+          ),
+      )
+      return response.text
+    except Exception as e:
+      # If 503 high demand spike, sleep briefly and retry
+      if ("503" in str(e) or "UNAVAILABLE" in str(e)) and attempt < retries - 1:
+        time.sleep(1.5 * (attempt + 1))
+        continue
+      raise e
+
+
+# --- Fallback Engine: Updated Hugging Face Serverless Router ---
 def classify_with_huggingface(prompt_text: str, token: str) -> str:
-  """Calls Hugging Face using an actively supported serverless inference model."""
-  url = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+  url = (
+      "https://router.huggingface.co/hf-inference/models/Qwen/Qwen2.5-Coder-32B-Instruct/v1/chat/completions"
+  )
   headers = {
       "Authorization": f"Bearer {token}",
       "Content-Type": "application/json",
   }
 
   system_prompt = (
-      "You are a customer support classifier. Return ONLY a valid raw JSON"
-      " object with no markdown backticks, matching this exact key structure:"
-      ' {"category": "Billing"|"Technical"|"Account Access"|"General'
-      ' Inquiry", "urgency": "Low"|"Medium"|"High"|"Critical", "summary":'
-      ' "<summary>", "action_required": "<next step>"}'
+      "You are a strict customer support ticket classifier. Reply ONLY with a"
+      ' valid JSON matching: {"category": "Billing"|"Technical"|"Account'
+      ' Access"|"General Inquiry", "urgency": "Low"|"Medium"|"High"|"Critical",'
+      ' "summary": "<1-sentence summary>", "action_required": "<recommended'
+      ' next action>"}. No markdown backticks or explanations.'
   )
 
-  full_prompt = f"<s>[INST] {system_prompt}\n\nTicket: {prompt_text} [/INST]"
-
   payload = {
-      "inputs": full_prompt,
-      "parameters": {
-          "max_new_tokens": 250,
-          "temperature": 0.1,
-          "return_full_text": False,
-      },
+      "messages": [
+          {"role": "system", "content": system_prompt},
+          {"role": "user", "content": prompt_text},
+      ],
+      "max_tokens": 250,
+      "temperature": 0.1,
   }
 
   response = requests.post(url, headers=headers, json=payload, timeout=12)
 
   if response.status_code == 200:
     data = response.json()
-    raw_content = data[0]["generated_text"].strip()
+    raw_content = data["choices"][0]["message"]["content"].strip()
     return raw_content.replace("```json", "").replace("```", "").strip()
   else:
     raise Exception(
@@ -79,7 +102,7 @@ def classify_with_huggingface(prompt_text: str, token: str) -> str:
     )
 
 
-# --- Execution Logic ---
+# --- Execution Pipeline ---
 if st.button("Classify Ticket", type="primary"):
   if not ticket_input.strip():
     st.warning("Please enter a ticket message first.")
@@ -87,23 +110,13 @@ if st.button("Classify Ticket", type="primary"):
     classified_data = None
     used_provider = None
 
-    # Step 1: Try Gemini with gemini-3.8-flash
+    # Step 1: Try Gemini with Exponential Backoff
     if gemini_api_key:
       try:
         client = genai.Client(api_key=gemini_api_key)
         with st.spinner("Analyzing ticket with Gemini..."):
-          response = client.models.generate_content(
-              model="gemini-3.8-flash",  # Active model string
-              contents=f"Classify this support ticket:\n\n{ticket_input}",
-              config=types.GenerateContentConfig(
-                  response_mime_type="application/json",
-                  response_schema=TicketClassification.model_json_schema(),
-                  temperature=0.1,
-              ),
-          )
-          classified_data = TicketClassification.model_validate_json(
-              response.text
-          )
+          raw_json = classify_with_gemini(client, ticket_input)
+          classified_data = TicketClassification.model_validate_json(raw_json)
           used_provider = "Google Gemini API (gemini-3.8-flash)"
       except Exception as gemini_err:
         st.warning(
@@ -119,11 +132,11 @@ if st.button("Classify Ticket", type="primary"):
           classified_data = TicketClassification.model_validate_json(
               hf_raw_json
           )
-          used_provider = "Hugging Face Inference (Mistral-7B)"
+          used_provider = "Hugging Face Serverless Router"
       except Exception as hf_err:
         st.error(f"Hugging Face Fallback Error: {hf_err}")
 
-    # Display UI Output
+    # Step 3: Render Output
     if classified_data:
       st.divider()
       col1, col2 = st.columns(2)
@@ -138,7 +151,4 @@ if st.button("Classify Ticket", type="primary"):
 
       st.caption(f"⚡ Processed using: **{used_provider}**")
     elif not gemini_api_key and not hf_token:
-      st.error(
-          "Please configure GEMINI_API_KEY or HF_TOKEN in your Render"
-          " Environment Variables."
-      )
+      st.error("Please configure API keys in Render Environment Variables.")
