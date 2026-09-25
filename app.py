@@ -41,37 +41,37 @@ hf_token = os.environ.get("HF_TOKEN")
 
 # --- Fallback Engine: Hugging Face Serverless API ---
 def classify_with_huggingface(prompt_text: str, token: str) -> str:
-  """Calls Hugging Face using an explicitly supported serverless model."""
-  url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+  """Calls Hugging Face using an actively supported serverless inference model."""
+  url = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
   headers = {
       "Authorization": f"Bearer {token}",
       "Content-Type": "application/json",
   }
 
   system_prompt = (
-      "You are a strict customer support ticket classifier. Classify the user"
-      " ticket and reply ONLY with a raw valid JSON object matching this schema:"
+      "You are a customer support classifier. Return ONLY a valid raw JSON"
+      " object with no markdown backticks, matching this exact key structure:"
       ' {"category": "Billing"|"Technical"|"Account Access"|"General'
       ' Inquiry", "urgency": "Low"|"Medium"|"High"|"Critical", "summary":'
-      ' "<1-sentence summary>", "action_required": "<recommended next'
-      ' action>"}. Do NOT include markdown wrapping or extra text.'
+      ' "<summary>", "action_required": "<next step>"}'
   )
 
+  full_prompt = f"<s>[INST] {system_prompt}\n\nTicket: {prompt_text} [/INST]"
+
   payload = {
-      "model": "Qwen/Qwen2.5-Coder-32B-Instruct",  # Supported serverless router model
-      "messages": [
-          {"role": "system", "content": system_prompt},
-          {"role": "user", "content": prompt_text},
-      ],
-      "max_tokens": 300,
-      "temperature": 0.1,
+      "inputs": full_prompt,
+      "parameters": {
+          "max_new_tokens": 250,
+          "temperature": 0.1,
+          "return_full_text": False,
+      },
   }
 
   response = requests.post(url, headers=headers, json=payload, timeout=12)
 
   if response.status_code == 200:
     data = response.json()
-    raw_content = data["choices"][0]["message"]["content"].strip()
+    raw_content = data[0]["generated_text"].strip()
     return raw_content.replace("```json", "").replace("```", "").strip()
   else:
     raise Exception(
@@ -87,13 +87,13 @@ if st.button("Classify Ticket", type="primary"):
     classified_data = None
     used_provider = None
 
-    # Step 1: Try Gemini
+    # Step 1: Try Gemini with gemini-3.8-flash
     if gemini_api_key:
       try:
         client = genai.Client(api_key=gemini_api_key)
         with st.spinner("Analyzing ticket with Gemini..."):
           response = client.models.generate_content(
-              model="gemini-2.5-flash",  # Active standard Gemini endpoint
+              model="gemini-3.8-flash",  # Active model string
               contents=f"Classify this support ticket:\n\n{ticket_input}",
               config=types.GenerateContentConfig(
                   response_mime_type="application/json",
@@ -104,7 +104,7 @@ if st.button("Classify Ticket", type="primary"):
           classified_data = TicketClassification.model_validate_json(
               response.text
           )
-          used_provider = "Google Gemini API"
+          used_provider = "Google Gemini API (gemini-3.8-flash)"
       except Exception as gemini_err:
         st.warning(
             f"Gemini API issue ({gemini_err}). Switching to Hugging Face"
@@ -119,7 +119,7 @@ if st.button("Classify Ticket", type="primary"):
           classified_data = TicketClassification.model_validate_json(
               hf_raw_json
           )
-          used_provider = "Hugging Face Serverless (Qwen2.5)"
+          used_provider = "Hugging Face Inference (Mistral-7B)"
       except Exception as hf_err:
         st.error(f"Hugging Face Fallback Error: {hf_err}")
 
