@@ -39,9 +39,9 @@ gemini_api_key = os.environ.get("GEMINI_API_KEY")
 hf_token = os.environ.get("HF_TOKEN")
 
 
-# --- Fallback Engine: Hugging Face Router API ---
+# --- Fallback Engine: Hugging Face Serverless API ---
 def classify_with_huggingface(prompt_text: str, token: str) -> str:
-  """Calls Hugging Face's serverless router using standard OpenAI-compatible format."""
+  """Calls Hugging Face using an explicitly supported serverless model."""
   url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
   headers = {
       "Authorization": f"Bearer {token}",
@@ -58,7 +58,7 @@ def classify_with_huggingface(prompt_text: str, token: str) -> str:
   )
 
   payload = {
-      "model": "meta-llama/Llama-3.2-3B-Instruct",
+      "model": "Qwen/Qwen2.5-Coder-32B-Instruct",  # Supported serverless router model
       "messages": [
           {"role": "system", "content": system_prompt},
           {"role": "user", "content": prompt_text},
@@ -67,7 +67,7 @@ def classify_with_huggingface(prompt_text: str, token: str) -> str:
       "temperature": 0.1,
   }
 
-  response = requests.post(url, headers=headers, json=payload, timeout=10)
+  response = requests.post(url, headers=headers, json=payload, timeout=12)
 
   if response.status_code == 200:
     data = response.json()
@@ -93,7 +93,7 @@ if st.button("Classify Ticket", type="primary"):
         client = genai.Client(api_key=gemini_api_key)
         with st.spinner("Analyzing ticket with Gemini..."):
           response = client.models.generate_content(
-              model="gemini-1.5-flash",  # Reliable stable endpoint
+              model="gemini-2.5-flash",  # Active standard Gemini endpoint
               contents=f"Classify this support ticket:\n\n{ticket_input}",
               config=types.GenerateContentConfig(
                   response_mime_type="application/json",
@@ -107,7 +107,7 @@ if st.button("Classify Ticket", type="primary"):
           used_provider = "Google Gemini API"
       except Exception as gemini_err:
         st.warning(
-            f"Gemini API unavailable ({gemini_err}). Switching to Hugging Face"
+            f"Gemini API issue ({gemini_err}). Switching to Hugging Face"
             " Fallback..."
         )
 
@@ -119,7 +119,7 @@ if st.button("Classify Ticket", type="primary"):
           classified_data = TicketClassification.model_validate_json(
               hf_raw_json
           )
-          used_provider = "Hugging Face Serverless (Llama-3.2)"
+          used_provider = "Hugging Face Serverless (Qwen2.5)"
       except Exception as hf_err:
         st.error(f"Hugging Face Fallback Error: {hf_err}")
 
@@ -138,4 +138,7 @@ if st.button("Classify Ticket", type="primary"):
 
       st.caption(f"⚡ Processed using: **{used_provider}**")
     elif not gemini_api_key and not hf_token:
-      st.error("Please configure your API keys in Render Environment Variables.")
+      st.error(
+          "Please configure GEMINI_API_KEY or HF_TOKEN in your Render"
+          " Environment Variables."
+      )
